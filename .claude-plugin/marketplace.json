@@ -1,0 +1,6 @@
+{
+  "name": "rtl-fix",
+  "owner": { "name": "Aurelius" },
+  "description": "Arabic (RTL) text direction fixes for Claude Code",
+  "plugins": [{ "name": "rtl-fix", "source": "./" }]
+}
