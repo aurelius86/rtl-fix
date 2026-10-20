@@ -5,6 +5,7 @@
 // first strong character right-to-left. Lines with no Arabic are untouched.
 
 export const RLM = '‏'
+export const LRM = '\u200E'
 const ARABIC = /[؀-ۿݐ-ݿࢠ-ࣿﭐ-﷿ﹰ-﻿]/
 // Markdown that must stay at the very start of the line to keep its meaning.
 const PREFIX = /^(\s*(?:(?:[-*+]|\d+[.)])\s+|#{1,6}\s+|>\s?)*)/
@@ -13,6 +14,8 @@ const FENCE = /^\s*(```|~~~)/
 export const hasArabic = (text: string): boolean => ARABIC.test(text)
 
 const LIST_ITEM = /^\s*(?:[-*+]|\d+[.)])\s+\S/
+// The first letter of the text, if it is Arabic (what sets a block's direction).
+const FIRST_STRONG_ARABIC = /^[^A-Za-z\p{Script=Arabic}]*\p{Script=Arabic}/u
 
 // A list takes its direction from its FIRST item, so in a message with Arabic an
 // English item ("- **License:** MIT.") at the top turned the whole list
@@ -49,14 +52,26 @@ export const fixTableRow = (line: string): string => {
 export const fixLine = (line: string, inArabicMessage = false): string => {
   if (line.trimStart().startsWith('|')) return inArabicMessage ? fixTableRow(line) : line
   const isItem = inArabicMessage && LIST_ITEM.test(line)
-  if (!hasArabic(line) && !isItem) return line
   const prefix = line.match(PREFIX)?.[1] ?? ''
   const rest = line.slice(prefix.length)
+  // In an English reply a list stays left-to-right: its first item sets the
+  // direction of the whole list, so an item starting in Arabic flipped it and
+  // the English items after it (seen live 2026-10-20). Such an item gets an LRM.
+  if (!inArabicMessage && LIST_ITEM.test(line)) {
+    if (rest.startsWith(LRM) || !FIRST_STRONG_ARABIC.test(rest)) return line
+    return `${prefix}${LRM}${rest}`
+  }
+  // Only a MOSTLY Arabic line turns right-to-left: one Arabic name in an
+  // English sentence flipped the whole line, its full stop jumping to the front.
+  if (!isItem && !(hasArabic(line) && mostlyArabic(rest))) return line
   return rest.startsWith(RLM) ? line : `${prefix}${RLM}${rest}`
 }
 
+// A reply counts as Arabic (its list items and tables run right-to-left) only
+// when it is MOSTLY Arabic: an English reply quoting one Arabic title is not.
 export const fixText = (text: string): string => {
   if (!hasArabic(text)) return text
+  const arabicMessage = mostlyArabic(text.replace(/^\s*(```|~~~)[\s\S]*?^\s*\1/gm, ''))
   let inFence = false
   return text
     .split('\n')
@@ -65,7 +80,7 @@ export const fixText = (text: string): string => {
         inFence = !inFence
         return line
       }
-      return inFence ? line : fixLine(line, true)
+      return inFence ? line : fixLine(line, arabicMessage)
     })
     .join('\n')
 }
@@ -81,24 +96,8 @@ export const PDI = '\u2069'
 export const isolateLine = (line: string): string =>
   !hasArabic(line) || line.startsWith(RLI) ? line : `${RLI}${line}${PDI}`
 
-// The AskUserQuestion input with every Arabic string isolated. A header must
-// stay within 12 characters (the tool's schema) or the dialog draws the original.
-export const isolateQuestions = (questions: unknown[]): unknown[] =>
-  (questions as any[]).map(q => ({
-    ...q,
-    question: typeof q.question === 'string' ? isolateLine(q.question) : q.question,
-    header: typeof q.header === 'string' && isolateLine(q.header).length <= 12 ? isolateLine(q.header) : q.header,
-    options: Array.isArray(q.options)
-      ? q.options.map((o: any) => ({
-          ...o,
-          label: typeof o.label === 'string' ? isolateLine(o.label) : o.label,
-          description: typeof o.description === 'string' ? isolateLine(o.description) : o.description,
-        }))
-      : q.options,
-  }))
-
-// For surfaces that lay every line out left-to-right AND draw bidi marks as
-// '�' (the AskUserQuestion dialog): pre-order the runs instead. Each Arabic
+// For surfaces that lay every line out left-to-right AND may draw bidi marks
+// as '�' (tool output): pre-order the runs instead. Each Arabic
 // run is still drawn right-to-left inside itself, so only the ORDER of the
 // runs needs turning round: "A1 E A2" is sent as "A2 E A1", which, laid out
 // left-to-right and read from the right, gives A1, E, A2. The line's trailing
@@ -116,11 +115,8 @@ const ARABIC_STRONG_PUNCT = '\u061F\u061B'
 const runKind = (ch: string): 'ar' | 'lat' | 'n' =>
   ARABIC_LETTER.test(ch) || ch === '\u0640' || ARABIC_STRONG_PUNCT.includes(ch) ? 'ar' : LATIN.test(ch) ? 'lat' : 'n'
 
-// `force` also orders a line with no Latin: a dialog line cut out of a longer
-// question can start or end with punctuation, which the left-to-right box puts
-// on the wrong edge (measured 2026-10-10).
-export const visualOrder = (line: string, force = false): string => {
-  if (!hasArabic(line) || (!force && !LATIN.test(line))) return line
+export const visualOrder = (line: string): string => {
+  if (!hasArabic(line) || !LATIN.test(line)) return line
   // Brackets are never lead/trail punctuation: "(ok)" at the end of a line must
   // keep its ")" for the pairing below, or it comes out as ")ok(".
   const lead = line.match(/^[^\p{L}\p{N}()[\]{}\u061F\u061B]*/u)?.[0] ?? ''
@@ -197,106 +193,11 @@ export const visualOrder = (line: string, force = false): string => {
     if (p.kind === 'lat' && flip.has(p.at)) out = out.slice(1) + MIRROR[p.text[0]]
     return out
   }
-  return [...trail].reverse().join('') + merged.reverse().map(text).join('') + [...lead].reverse().join('')
-}
-
-// The AskUserQuestion input with every string passed through f; `field` says
-// which one (a question may be cut into lines, an option may not).
-type Field = 'question' | 'header' | 'label' | 'description'
-const eachString = (questions: unknown[], f: (s: string, field: Field) => string): unknown[] =>
-  (questions as any[]).map(q => ({
-    ...q,
-    question: typeof q.question === 'string' ? f(q.question, 'question') : q.question,
-    header: typeof q.header === 'string' ? f(q.header, 'header') : q.header,
-    options: Array.isArray(q.options)
-      ? q.options.map((o: any) => ({
-          ...o,
-          label: typeof o.label === 'string' ? f(o.label, 'label') : o.label,
-          description: typeof o.description === 'string' ? f(o.description, 'description') : o.description,
-        }))
-      : q.options,
-  }))
-
-// A pre-ordered string is only right while it fits on ONE line: the dialog
-// wraps a long one left-to-right, so the END of the sentence lands on the top
-// line (seen live 2026-10-09). The question keeps a '\n' as a line break, while
-// bidi marks and U+2028 are drawn as '�' (both seen live 2026-10-10). So a long
-// mixed question is cut at spaces into lines of at most DIALOG_MAX characters,
-// each pre-ordered on its own. Whether an option keeps a '\n' is untested, so a
-// long mixed label or description is refused instead (tooLongForDialog).
-export const DIALOG_MAX = 100
-
-export const wrapChunks = (text: string): string[] => {
-  const lines: string[] = []
-  let line = ''
-  for (const word of text.split(' ')) {
-    if (line && line.length + 1 + word.length > DIALOG_MAX) {
-      lines.push(line)
-      line = word
-    } else line = line ? `${line} ${word}` : word
-  }
-  if (line) lines.push(line)
-  return lines
-}
-
-const isMixed = (s: string): boolean => visualOrder(s) !== s
-
-// The bidi bracket rule (N0) gives a bracket pair the direction of the text
-// before it, so a pair around Arabic that follows English (or opens a line)
-// turns left-to-right and splits its run: "(ما بيبيّن) والاسم" read as
-// "والاسم ... (ما بيبيّن)". The ornate pair U+FD3F/U+FD3E is no bidi bracket
-// pair, so it stays with its run; a pair around English keeps its brackets,
-// which visualOrder places itself. Measured in Chromium against the same lines
-// drawn dir=rtl, letters and bracket positions: 12/12 (9/12 with every pair
-// ornate, 7/12 with none). U+FD3F is drawn like ")" and U+FD3E like "(", in any
-// context, so inside a right-to-left run they enclose as "(…)".
-export const ornate = (s: string): string =>
-  s.replace(/\(([^()]*)\)/g, (m, inner: string) => (hasArabic(inner) ? `\uFD3F${inner}\uFD3E` : m))
-
-const dialogOrder = (s: string, field: Field): string => {
-  if (!hasArabic(s)) return s
-  const t = ornate(s)
-  return field === 'question' && t.length > DIALOG_MAX && isMixed(t) && !t.includes('\n')
-    ? wrapChunks(t).map(c => visualOrder(c, true)).join('\n')
-    : visualOrder(t, true)
-}
-
-export const orderQuestions = (questions: unknown[]): unknown[] => eachString(questions, dialogOrder)
-
-export const tooLongForDialog = (questions: unknown[]): string[] => {
-  const long: string[] = []
-  eachString(questions, (s, field) => {
-    if ((field === 'label' || field === 'description') && s.length > DIALOG_MAX && isMixed(s)) long.push(s)
-    return s
-  })
-  return long
-}
-
-// The dialog answers with the pre-ordered strings it drew. Built from the call's
-// own (original) questions, so it needs no state: pre-ordered → original.
-export const originalsOf = (questions: unknown[]): Map<string, string> => {
-  const map = new Map<string, string>()
-  eachString(questions, (s, field) => {
-    const ordered = dialogOrder(s, field)
-    if (ordered !== s) map.set(ordered, s)
-    return s
-  })
-  return map
-}
-
-// Every string in a value (keys too) with each pre-ordered string put back.
-export const restoreOriginals = (map: Map<string, string>, value: unknown): unknown => {
-  if (typeof value === 'string') {
-    if (map.has(value)) return map.get(value)
-    // A multi-select answer joins its labels ("a, b"): put each one back.
-    let out = value
-    for (const [ordered, original] of map) out = out.split(ordered).join(original)
-    return out
-  }
-  if (Array.isArray(value)) return value.map(v => restoreOriginals(map, v))
-  if (value && typeof value === 'object')
-    return Object.fromEntries(Object.entries(value).map(([k, v]) => [map.get(k) ?? k, restoreOriginals(map, v)]))
-  return value
+  // Edge punctuation crosses to the other side, where the left-to-right box
+  // draws it unmirrored: a closing '»' at the left edge reads as an opening
+  // one (seen live in the dialog, 2026-10-20), so a guillemet changes shape.
+  const edge = (p: string) => [...p].reverse().map(c => (c === '«' ? '»' : c === '»' ? '«' : c)).join('')
+  return edge(trail) + merged.reverse().map(text).join('') + edge(lead)
 }
 
 // Tool output (Bash stdout, Read content, …) is drawn as a left-to-right code

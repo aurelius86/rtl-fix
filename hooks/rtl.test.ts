@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { DIALOG_MAX, PDI, RLI, RLM, isolatePlan, ornate, tooLongForDialog, wrapChunks, fixText, orderOutput, orderOutputLine, orderQuestions, originalsOf, restoreOriginals, visualOrder } from './rtl'
+import { PDI, RLI, RLM, isolatePlan, fixText, orderOutput, orderOutputLine, visualOrder } from './rtl'
 
 test('English text is untouched', () => {
   const text = '✅ **Done.** Tests pass.\n- one\n- two'
@@ -58,18 +58,6 @@ test('a bracket group mixing Arabic and English keeps both brackets on the right
   expect(visualOrder('شوف (English أو عربي) هون')).toBe('أو عربي) هون English) شوف')
 })
 
-test('the answer card gets the original question and answer back', () => {
-  const original = [{ question: 'كل قوس بمحله (عربي أو English) طالعة صح؟', header: 'x', options: [{ label: 'تمام (ok)', description: 'd' }] }]
-  const [q]: any = orderQuestions(original)
-  expect(q.question).not.toBe(original[0].question)
-  expect(q.options[0].label).not.toBe('تمام (ok)')
-  const output = { questions: [q], answers: { [q.question]: q.options[0].label } }
-  expect(restoreOriginals(originalsOf(original), output)).toEqual({
-    questions: original,
-    answers: { [original[0].question]: 'تمام (ok)' },
-  })
-})
-
 test('tool output: a line starting in Arabic is reordered even when its English is longer', () => {
   expect(orderOutputLine('هل الـ sandbox (CT301) شغّال؟')).toBe('شغّال؟ sandbox (CT301) هل الـ')
   expect(orderOutputLine('الـ API رجّع 404 Not Found')).not.toBe('الـ API رجّع 404 Not Found')
@@ -120,57 +108,6 @@ test('a table in an Arabic message: Arabic cells isolated; separator, empty and 
   expect(fixText('| a | b |\n|---|---|')).toBe('| a | b |\n|---|---|')
 })
 
-test('a long mixed QUESTION is cut into lines joined by \\n, each pre-ordered on its own (the dialog keeps \\n, seen live)', () => {
-  const long = 'أنشر rtl-fix كـ repo عام (public) باسم aurelius86/rtl-fix؟ بيبلّش بـ history جديد من commit واحد، والـ author هو الـ noreply تبع GitHub.'
-  const [q]: any = orderQuestions([{ question: long, header: 'x', options: [{ label: 'انشر public هلق', description: 'd' }] }])
-  const chunks = wrapChunks(long)
-  expect(chunks.length).toBeGreaterThan(1)
-  expect(chunks.join(' ')).toBe(long)
-  for (const c of chunks) expect(c.length).toBeLessThanOrEqual(DIALOG_MAX)
-  expect(q.question).toBe(chunks.map(c => visualOrder(ornate(c), true)).join('\n'))
-  expect(q.options[0].label).toBe(visualOrder('انشر public هلق'))
-  expect(originalsOf([{ question: long, header: 'x', options: [] }]).get(q.question)).toBe(long)
-  // A long question is no longer refused; a pure Arabic one is left whole.
-  expect(tooLongForDialog([{ question: long, header: 'x', options: [] }])).toEqual([])
-  const pure = 'هيدا سؤال طويل كتير بس كلو عربي وما فيه ولا كلمة إنكليزية أبداً لحتى يضل يلتف صح'
-  const [p]: any = orderQuestions([{ question: pure, header: 'x', options: [] }])
-  expect(p.question).toBe(pure)
-})
-
-test('a long mixed option label or description is still flagged (\\n there is untested)', () => {
-  const long = 'بيبلّش بـ history جديد من commit واحد، والـ author هو الـ noreply تبع GitHub، والاسم اللي بيطلع هو Aurelius بس'
-  expect(long.length).toBeGreaterThan(DIALOG_MAX)
-  const qs = [{ question: 'سؤال؟', header: 'x', options: [{ label: 'إي', description: long }, { label: long, description: 'd' }] }]
-  expect(tooLongForDialog(qs)).toEqual([long, long])
-  expect(tooLongForDialog([{ question: 'سؤال؟', header: 'x', options: [{ label: 'انشر public هلق', description: 'd' }] }])).toEqual([])
-})
-
-test('a dialog bracket pair around Arabic becomes the ornate pair, which the bidi bracket rule leaves alone (measured 12/12 vs 7/12)', () => {
-  expect(ornate('هو الـ noreply (ما بيبيّن) والاسم')).toBe('هو الـ noreply \uFD3Fما بيبيّن\uFD3E والاسم')
-  const [q]: any = orderQuestions([{ question: '(ما بيبيّن الإيميل)، والاسم هو', header: 'x', options: [{ label: 'تمام (ok)', description: 'English (only)' }] }])
-  // The pair opens the line, so its edges are ordered too: the opener goes to the line's end.
-  expect(q.question).toBe(visualOrder('\uFD3Fما بيبيّن الإيميل\uFD3E، والاسم هو', true))
-  expect(q.question.endsWith('\uFD3F')).toBe(true)
-  // A pair around English keeps its brackets.
-  expect(q.options[0].label).toBe(visualOrder('تمام (ok)'))
-  // An English-only string is left alone, brackets and all.
-  expect(q.options[0].description).toBe('English (only)')
-  // The answer still maps back to the original text.
-  expect(originalsOf([{ question: 'x', header: 'x', options: [{ label: 'تمام (ok)', description: 'd' }] }]).get(q.options[0].label)).toBe('تمام (ok)')
-})
-
-test('a dialog line cut from a long question that starts with an Arabic bracket group gets its edges ordered too', () => {
-  // 99 characters of filler, so the bracket group opens the second line.
-  const long = 'كلمة word '.repeat(10).trimEnd() + ' (ما بيبيّن الإيميل)، والاسم اللي بيطلع هو'
-  const [q]: any = orderQuestions([{ question: long, header: 'x', options: [] }])
-  const lines: string[] = q.question.split('\n')
-  const chunks = wrapChunks(ornate(long))
-  const pure = chunks.find(c => !/[A-Za-z]/.test(c))!
-  expect(pure.startsWith('\uFD3F')).toBe(true)
-  // The leading ornate bracket moves to the line's end, where a left-to-right box shows it at the right edge.
-  expect(lines[chunks.indexOf(pure)].endsWith('\uFD3F')).toBe(true)
-})
-
 test('a plan: each Arabic line isolated RTL, list markers moved inside, fences and English untouched', () => {
   const plan = [
     '# Plan title',
@@ -196,4 +133,31 @@ test('a plan: each Arabic line isolated RTL, list markers moved inside, fences a
   ])
   // Idempotent: a plan already written with the marks is left as it is.
   expect(isolatePlan(isolatePlan(plan))).toBe(isolatePlan(plan))
+})
+
+test('an English reply quoting a few Arabic words stays left-to-right (seen live after the 2026-10-13 desktop update)', async () => {
+  const text =
+    'The ERP session "متابعة مشروع ERP" had already finished, so I picked up from where it stopped.\n\n' +
+    '**Two candidates for the next step:**\n' +
+    '- **PR-12, the platform blueprint:** already in progress.\n' +
+    '- **PR-15, service centres:** your latest idea, not started yet.'
+  expect(fixText(text)).toBe(text)
+  // An Arabic-led line inside that English reply still turns right-to-left.
+  expect(fixText('English intro.\nالخطوة الجاية: PR-12')).toBe(`English intro.\n${RLM}الخطوة الجاية: PR-12`)
+})
+
+test('a guillemet moved to the other edge of a pre-ordered line is mirrored, so a sentence read from the right ends in « (seen live 2026-10-20)', () => {
+  expect(visualOrder('«مرحبا» يا Claude').endsWith('»')).toBe(true)
+  expect(visualOrder('شوف README «هون»').startsWith('«')).toBe(true)
+})
+
+test('in an English reply a list whose first item starts in Arabic stays left-to-right: each such item gets an LRM (seen live 2026-10-20)', () => {
+  const LRM = '‎'
+  const text = 'Check each line:\n1. «هل الـ sandbox (CT301) شغّال؟»\n2. «افتح ملف README» (in the box, the number goes last)\n3. The English line stays left-to-right.'
+  const lines = fixText(text).split('\n')
+  expect(lines[1]).toBe(`1. ${LRM}«هل الـ sandbox (CT301) شغّال؟»`)
+  expect(lines[2]).toBe(`2. ${LRM}«افتح ملف README» (in the box, the number goes last)`)
+  expect(lines[3]).toBe('3. The English line stays left-to-right.')
+  // A plain (non-list) Arabic line in the same reply still turns right-to-left.
+  expect(fixText('Done.\nشغّلنا الـ tests على الـ server').split('\n')[1]).toBe(`${RLM}شغّلنا الـ tests على الـ server`)
 })

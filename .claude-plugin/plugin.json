@@ -1,7 +1,7 @@
 {
   "name": "rtl-fix",
-  "version": "1.4.0",
-  "description": "Arabic (RTL) text reads right-to-left in Claude Code: replies, your own messages, and the question dialog",
+  "version": "1.4.4",
+  "description": "Arabic (RTL) text reads right-to-left in Claude Code: replies, your own messages and tool output",
   "author": { "name": "Aurelius" },
   "license": "MIT",
   "keywords": ["arabic", "rtl", "bidi", "right-to-left", "i18n"]

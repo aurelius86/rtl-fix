@@ -4,12 +4,12 @@
 
 Claude Code lays text out left-to-right and picks a line's direction from its first
 strong character. For Arabic that means reversed word order in mixed lines, lists on the
-wrong side, and `�` boxes in dialogs. `rtl-fix` is a plugin that fixes every place a
-plugin can reach: Claude's replies, your own messages, the question dialog and tool
-output (Bash, Read, Edit diffs, grep).
+wrong side, and `�` boxes in tool output. `rtl-fix` is a plugin that fixes every place a
+plugin can reach: Claude's replies, your own messages and tool output (Bash, Read, Edit
+diffs, grep).
 
 **بالعربي:** هالإضافة بتخلّي النص العربي ينقرا صح من اليمين لليسار بـ Claude Code: بردود
-Claude، وبرسائلك انت، وبنافذة الأسئلة، وبنتايج الأدوات (Bash وRead وEdit وgrep). الكلمات
+Claude، وبرسائلك انت، وبنتايج الأدوات (Bash وRead وEdit وgrep). الكلمات
 الإنكليزي والأرقام والأقواس بتضل بمحلها بنص الجملة العربي. هي بتغيّر شكل العرض بس، مش
 المحادثة نفسها.
 
@@ -58,16 +58,9 @@ as `Arabic 2 English Arabic 1`. Each Arabic line is wrapped in an RLI…PDI isol
 
 ### The question dialog
 
-The dialog is left-to-right and draws bidi marks as `�`, so marks can't be used there.
-Instead the runs of each mixed line are pre-ordered so the line reads right-to-left:
-digits stay with their word, brackets with what they enclose, and `؟` `؛` (strong RTL
-characters, not neutral punctuation) with their Arabic word. The answer you pick comes
-back in the pre-ordered form: the answer card under the question shows it that way, so it
-reads right-to-left, and Claude gets your original text beside it as a note.
-
-| Before | After |
-|---|---|
-| ![Dialog without rtl-fix](docs/before-dialog.png) | ![Dialog with rtl-fix](docs/after-dialog.png) |
+Since Claude Code 2.1.299 the dialog lays Arabic out right-to-left itself, so rtl-fix
+leaves it alone (1.4.3). Up to 1.4.2 it pre-ordered the dialog's mixed lines, which on
+2.1.299 made them read from the middle.
 
 ### Tool output: Bash, Read, Edit diff, grep
 
@@ -84,14 +77,12 @@ mostly English are left alone.
 ## What it changes
 
 Display only. The stored conversation, the files on disk and what the model reads are
-untouched (the one exception is the dialog answer, above). Lines without Arabic, code
-blocks and tables are left alone.
+untouched. Lines without Arabic and code blocks are left alone.
 
 | Where | Technique |
 |---|---|
-| Replies | RLM after the markdown marker of Arabic lines and of every list item in an Arabic message |
+| Replies | RLM after the markdown marker of Arabic lines and of every list item in an Arabic message; in an English message, an LRM on a list item that starts in Arabic so the list stays left-to-right |
 | Your messages | RLI…PDI around each Arabic line |
-| Question dialog | Pre-ordered runs (`visualOrder`); the answer kept pre-ordered for the card, originals sent to Claude as a note |
 | Tool output | Pre-ordered mostly-Arabic lines (`orderOutput`), prefixes kept |
 
 ## Limits
@@ -104,15 +95,7 @@ blocks and tables are left alone.
   same text with each Arabic line wrapped in RLI…PDI (list markers inside the wrapper, two
   trailing spaces). Claude writes it again and the pane reads right-to-left; the lines stay
   aligned to the left edge.
-- **Long lines in the question dialog.** A pre-ordered line reads right only on one line, so a
-  long mixed question is cut into lines of up to 100 characters, each ordered on its own (the
-  dialog keeps a `\n`; it shows bidi marks and U+2028 as `�`). A narrower window can still wrap
-  one of those lines. A mixed option label or description over 100 characters is refused, and
-  Claude asks again with shorter text. Brackets around Arabic in the dialog are drawn with the
-  ornate pair `﴾﴿`, which the bidi bracket rule leaves in place.
-- With several options chosen, the answer card lists them last first (the app joins them
-  left-to-right, and a rewritten answer makes the card fall back to unordered text).
-- Built and tested on Claude Code 2.1.293 (terminal and desktop Code tab). The plugin API
+- Built on Claude Code 2.1.293; checked again on 2.1.299 (desktop Code tab). The plugin API
   is early access and may change.
 
 ## Develop
